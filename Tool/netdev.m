@@ -39,6 +39,7 @@ while j <= nargin-2
                             driver = driver_strategy;
                             j = j+2;
                         case 1
+                            controlrate = varargin{j+2};
                             switch driver_strategy
                                 case 'rand'
                                     [s,Index]   = sort(rand(N,1),'descend');
@@ -57,7 +58,6 @@ while j <= nargin-2
                                     [W,Index] = sort(water,'descend') ;
                                     driver    = sort(Index(1:ceil(controlrate*N))) ;
                             end
-                            controlrate = varargin{j+2};
                             j = j+3;
                     end
             end
