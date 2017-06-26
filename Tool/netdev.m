@@ -1,17 +1,22 @@
-function [history,phase,driver] = netdev(A,parameter,varargin)
+function [history,delta,c] = netdev(adj,parameter,varargin)
 
-r = parameter(1);
-g = parameter(2);
-e = parameter(3);
+r = parameter(:,1);
+g = parameter(:,2);
+e = parameter(:,3);
 
-N    = length(A);
+A = adj';
+N = length(A);
 step = 10000;
 Ct     = 0;
 driver = [];
 initialstate = rand(N,1);
-initialphase = zeros(N,1);
+initialdelta = zeros(N,1);
 
-out = sum(A,1)';   in = sum(A,2);   tot = out-in ;
+L = 1 - 1/(r-e) ;
+R = 1 - 1/(r+e) ;
+out = sum(A,1)' ;   in = sum(A,2) ;
+in_zero    = (in == 0) ;
+in_nonzero = (in ~= 0) ;
 
 j = 1;
 while j <= nargin-2
@@ -20,14 +25,23 @@ while j <= nargin-2
             error('No define classification of property for %dth value\n',j)
         case 1
             switch varargin{j}
+                case 'L'
+                    L = varargin{j+1} ;
+                    j = j+2;
+                case 'R'
+                    R = varargin{j+1} ;
+                    j = j+2;
+                case 'threshold'
+                    threshold = varargin{j+1} ;
+                    j = j+2;
                 case 'step'
                     step = varargin{j+1};
                     j = j+2;
                 case 'initialstate'
                     initialstate = varargin{j+1};
                     j = j+2;
-                case 'initialphase'
-                    initialphase = varargin{j+1};
+                case 'initialdelta'
+                    initialdelta = varargin{j+1};
                     j = j+2;
                 case 'controlT'
                     Ct = sort(varargin{j+1}) ;
@@ -39,58 +53,70 @@ while j <= nargin-2
                             driver = driver_strategy;
                             j = j+2;
                         case 1
-                            controlrate = varargin{j+2};
                             switch driver_strategy
                                 case 'rand'
-                                    [s,Index]   = sort(rand(N,1),'descend');
-                                    driver      = sort(Index(1:ceil(controlrate*N)));
-                                case 'OID'
-                                    [O_I,Index] = sort(out-in,'descend');
-                                    driver      = sort(Index(1:ceil(controlrate*N)));
-                                case 'OD'
-                                    [OD,Index]  = sort(tot,'descend');
-                                    driver      = sort(Index(1:ceil(controlrate*N)));
-                                case 'water'
-                                    water = out ;
-                                    for i = 1 : 10000
-                                        water = A*(water./out) ;
-                                    end
-                                    [W,Index] = sort(water,'descend') ;
-                                    driver    = sort(Index(1:ceil(controlrate*N))) ;
+                                    numCN = varargin{j+2};
+                                    [~,Index] = sort(rand(N,1),'descend');
+                                    driver    = Index(1:numCN);
+                                    j = j + 3 ;
+                                case 'dynamic'
+                                    evalf  = varargin{j+2} ;
+                                    numCN  = varargin{j+3} ;
+                                    j = j + 4 ;
                             end
-                            j = j+3;
                     end
+                otherwise
+                    error('" %s " is not defined.\n',varargin{j})
             end
     end
 end
 %===============================================================
-w = A.*g;
-M = (w-diag(sum(w,2)))./(in*ones(1,N));
-M(isnan(sum(M,2)),:) = A(isnan(sum(M,2)),:);
-M = M+eye(N);
-Cphase  = initialphase;
-space   = initialstate;
-phase   = zeros(N,step);
-history = zeros(N,step);
+x  = initialstate ;
+dx = initialdelta ;
+ph = sign(dx) ;
+c  = false(N,step) ;
+delta   = zeros(N,step) ;
+history = zeros(N,step) ;
 %========== Evolution ==========================
 t = 1 ;
+distance = dist(A,ceil(0.5*(N-N^0.5))) ; %%%
 for iii = 1:step
-    fx = r*space.*(1-space);
     %========== control ========================
     if t <= length(Ct) && iii == Ct(t)
-        c = Cphase;
-        t = t+1;
-    else
-        c = zeros(N,1) ;
+        if strcmp(driver_strategy,'dynamic')
+            switch evalf
+                case 'laplacian'
+                    D = abs((A*x)./in - x) ;
+                case 'unknown'
+                    D = abs((A*(x.*ph))./in - x) ;
+                case 'tent'
+                    D = (x<L).*x + (x>R).*(L/(1-R)*(1-x)) ;
+%                     D = D.*(distance <= ceil(1/10*(iii-Ct(1)))) ; %%%
+                case '+0-'
+%                     threshold = 0.026 ;
+                    D = abs(dx) ;
+                    D = (1-D).*(D>threshold) ;
+            end
+            [D_sort,Index] = sort(D,'descend') ;
+            ND = sum(D_sort>0) ;
+            switch ND > numCN
+                case 0
+                    driver = Index(1:ND) ;
+                case 1
+                    driver = Index(1:numCN) ;
+            end
+        end
+        c(driver,iii) = true ;
+        t = t + 1 ;
     end
     
-    fxc = (r+c*e).*space.*(1-space);
-    fx(driver) = fxc(driver);
+    fx = (r+c(:,iii).*ph.*e).*x.*(1-x);
+    history(:,iii) = (1-g.*in_nonzero).*fx + g./(in+in_zero).*(A*fx) ;
+    delta(:,iii)   = history(:,iii) - x ;
     
-    history(:,iii) = M*fx;
-    phase(:,iii)   = sign(history(:,iii)-space) ;
-    space  = history(:,iii) ;
-    Cphase = phase(:,iii) ;
+    x  = history(:,iii) ;
+    dx = delta(:,iii) ;
+    ph = sign(dx) ;
 end
 
 end
